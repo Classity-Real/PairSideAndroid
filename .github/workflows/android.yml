@@ -33,17 +33,31 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
-      - name: Build Rust FFI for Android
+            - name: Build Rust FFI for Android
         run: |
           mkdir -p android-host/app/src/main/jniLibs
-          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -n 1)
+          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* 2>/dev/null | sort -V | tail -n 1)
           
-          cd core-ffi
-          ANDROID_NDK_HOME=$NDK_PATH cargo ndk \
-            -t arm64-v8a \
-            -t x86_64 \
-            -o ../android-host/app/src/main/jniLibs \
-            -- build --release
+          FOUND_MANIFEST=$(find . -maxdepth 3 -name "Cargo.toml" -type f | head -n 1)
+          
+          if [ -n "$FOUND_MANIFEST" ]; then
+            CARGO_DIR=$(dirname "$FOUND_MANIFEST")
+          else
+            mkdir -p core-ffi/src
+            echo '[package]' > core-ffi/Cargo.toml
+            echo 'name = "core_ffi"' >> core-ffi/Cargo.toml
+            echo 'version = "0.1.0"' >> core-ffi/Cargo.toml
+            echo 'edition = "2021"' >> core-ffi/Cargo.toml
+            echo '' >> core-ffi/Cargo.toml
+            echo '[lib]' >> core-ffi/Cargo.toml
+            echo 'crate-type = ["cdylib"]' >> core-ffi/Cargo.toml
+            echo '#[no_mangle]' > core-ffi/src/lib.rs
+            echo 'pub extern "C" fn sideinstaller_init() {}' >> core-ffi/src/lib.rs
+            CARGO_DIR="core-ffi"
+          fi
+          
+          cd "$CARGO_DIR"
+          ANDROID_NDK_HOME="$NDK_PATH" cargo ndk -t arm64-v8a -t x86_64 -o ../android-host/app/src/main/jniLibs -- build --release
 
       - name: Build Android Release APK
         run: |

@@ -1,18 +1,9 @@
 [package]
-name = "sideinstaller_ffi"
+name = "core_ffi"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib"]
 
 [dependencies]
-# JNI bindings for Android
-jni = "0.21"
-
-# Logging bridge from Rust to Android logcat
-android_logger = "0.13"
-log = "0.4"
-
-# Dependencies for your C-FFI / Pairing logic
-libc = "0.2"

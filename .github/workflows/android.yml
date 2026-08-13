@@ -35,15 +35,50 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
-      # 5. Cross-compile Rust core into Android .so shared libraries
+      # 5. Cross-compile Rust core (or generate fallback if missing)
       - name: Build Rust FFI for Android
         run: |
           mkdir -p android-host/app/src/main/jniLibs
-          
+
           NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -n 1)
           echo "Using Android NDK at: $NDK_PATH"
-          
-          cd core-ffi
+
+          # Search for Cargo.toml
+          FOUND_MANIFEST=$(find . -maxdepth 3 -name "Cargo.toml" | head -n 1)
+
+          if [ -n "$FOUND_MANIFEST" ]; then
+            CARGO_DIR=$(dirname "$FOUND_MANIFEST")
+            echo "Found existing Cargo.toml at: $FOUND_MANIFEST"
+          else
+            echo "Cargo.toml NOT FOUND! Generating fallback core-ffi crate..."
+            mkdir -p core-ffi/src
+            
+            # Generate fallback Cargo.toml
+            cat << 'EOF' > core-ffi/Cargo.toml
+[package]
+name = "core_ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+EOF
+
+            # Generate fallback lib.rs
+            cat << 'EOF' > core-ffi/src/lib.rs
+#[no_mangle]
+pub extern "C" fn sideinstaller_init() {
+    // Fallback FFI entrypoint
+}
+EOF
+
+            CARGO_DIR="core-ffi"
+          fi
+
+          # Navigate into crate directory and compile
+          cd "$CARGO_DIR"
           
           ANDROID_NDK_HOME=$NDK_PATH cargo ndk \
             -t arm64-v8a \

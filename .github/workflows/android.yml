@@ -62,54 +62,17 @@ jobs:
       - name: Build Android Release APK
         run: |
           cd android-host
-          echo "android.useAndroidX=true" >> gradle.properties
-          echo "android.enableJetifier=true" >> gradle.properties
+          ./gradlew --debug assembleRelease 2>&1 | tee build.log
           
-          mkdir -p app/src/main
-          cat <<EOF > app/src/main/AndroidManifest.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              
-              <uses-sdk
-                  android:minSdkVersion="21"
-                  android:targetSdkVersion="34" />
-              
-              <application
-                  android:allowBackup="true"
-                  android:debuggable="false"
-                  android:label="SideInstaller"
-                  android:theme="@android:style/Theme.Light">
-                  
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-          
-          mkdir -p app/src/main/java/com/example/sideinstaller
-          cat <<EOF > app/src/main/java/com/example/sideinstaller/MainActivity.java
-          package com.example.sideinstaller;
-
-          import android.app.Activity;
-          import android.os.Bundle;
-
-          public class MainActivity extends Activity {
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-              }
-          }
-          EOF
-          
-          gradle assembleRelease --no-daemon
+          # If build fails, show the problems report
+          if [ ! -f "app/build/outputs/apk/release"/*.apk ]; then
+            echo "=== BUILD FAILED - Showing resources error details ==="
+            find . -name "problems-report.html" -exec cat {} \;
+            exit 1
+          fi
 
       - name: Upload APK Artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: SideInstaller-Android-Host-APK

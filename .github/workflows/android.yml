@@ -33,7 +33,7 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
-            - name: Build Rust FFI for Android
+      - name: Build Rust FFI for Android
         run: |
           mkdir -p android-host/app/src/main/jniLibs
           NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* 2>/dev/null | sort -V | tail -n 1)

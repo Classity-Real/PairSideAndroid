@@ -1,0 +1,66 @@
+name: Build Android Host App & Rust Core
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-android:
+    name: Build Android APK & Native Libraries
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout repository
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Set up Java JDK 17
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      # 3. Set up Android NDK
+      - name: Set up Android NDK
+        uses: n swell/setup-android-ndk@v1
+        with:
+          ndk-version: r26b
+
+      # 4. Set up Rust toolchain and add Android targets
+      - name: Install Rust Toolchain & Android Targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, x86_64-linux-android
+
+      # 5. Install cargo-ndk tool
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      # 6. Cross-compile Rust core into Android .so shared libraries
+      - name: Build Rust FFI for Android
+        run: |
+          mkdir -p android-host/app/src/main/jniLibs
+          cd core-ffi
+          cargo ndk -t arm64-v8a -t x86_64 -o ../android-host/app/src/main/jniLibs build --release
+
+      # 7. Grant execute permission for Gradle wrapper
+      - name: Grant Executable Permission for Gradle
+        run: chmod +x android-host/gradlew
+
+      # 8. Build release APK with Gradle
+      - name: Build Android Release APK
+        run: |
+          cd android-host
+          ./gradlew assembleRelease --no-daemon
+
+      # 9. Upload APK as GitHub Build Artifact
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SideInstaller-Android-Host-APK
+          path: android-host/app/build/outputs/apk/release/*.apk

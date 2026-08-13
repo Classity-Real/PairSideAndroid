@@ -3,7 +3,6 @@ name: Build Android Host App & Rust Core
 on:
   push:
     branches: [ "main", "master" ]
-    tags: [ 'v*' ]
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
@@ -23,7 +22,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Gradle Action
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
 
       - name: Install Rust Toolchain & Android Targets
@@ -36,78 +35,23 @@ jobs:
 
       - name: Build Rust FFI for Android
         run: |
-          set -e
-          set -x
-          
           mkdir -p android-host/app/src/main/jniLibs
-          echo "✓ Created jniLibs directory"
-
-          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* 2>/dev/null | sort -V | tail -n 1)
-          if [ -z "$NDK_PATH" ]; then
-            echo "❌ ERROR: Android NDK not found at $ANDROID_SDK_ROOT/ndk/"
-            exit 1
-          fi
-          echo "✓ Using Android NDK at: $NDK_PATH"
-
-          FOUND_MANIFEST=$(find . -maxdepth 3 -name "Cargo.toml" -type f | head -n 1)
-
-          if [ -n "$FOUND_MANIFEST" ]; then
-            CARGO_DIR=$(dirname "$FOUND_MANIFEST")
-            echo "✓ Found existing Cargo.toml at: $FOUND_MANIFEST"
-          else
-            echo "⚠ Cargo.toml NOT FOUND! Generating fallback core-ffi crate..."
-            mkdir -p core-ffi/src
-            
-            echo '[package]' > core-ffi/Cargo.toml
-            echo 'name = "core_ffi"' >> core-ffi/Cargo.toml
-            echo 'version = "0.1.0"' >> core-ffi/Cargo.toml
-            echo 'edition = "2021"' >> core-ffi/Cargo.toml
-            echo '' >> core-ffi/Cargo.toml
-            echo '[lib]' >> core-ffi/Cargo.toml
-            echo 'crate-type = ["cdylib"]' >> core-ffi/Cargo.toml
-            echo '' >> core-ffi/Cargo.toml
-            echo '[dependencies]' >> core-ffi/Cargo.toml
-
-            echo '#[no_mangle]' > core-ffi/src/lib.rs
-            echo 'pub extern "C" fn sideinstaller_init() {}' >> core-ffi/src/lib.rs
-
-            CARGO_DIR="core-ffi"
-            echo "✓ Generated fallback Cargo project"
-          fi
-
-          cd "$CARGO_DIR"
-          echo "✓ Building Rust FFI for Android..."
+          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -n 1)
           
-          ANDROID_NDK_HOME="$NDK_PATH" cargo ndk \
+          cd core-ffi
+          ANDROID_NDK_HOME=$NDK_PATH cargo ndk \
             -t arm64-v8a \
             -t x86_64 \
-            -o "../../android-host/app/src/main/jniLibs" \
+            -o ../android-host/app/src/main/jniLibs \
             -- build --release
-          
-          cd - > /dev/null
-          echo "✓ Rust FFI build complete"
-
-      - name: Ensure Gradle Wrapper Exists
-        run: |
-          cd android-host
-          if [ ! -f "gradlew" ]; then
-            echo "⚠ gradlew missing. Generating Gradle wrapper automatically..."
-            gradle wrapper
-          fi
-          chmod +x gradlew
-          echo "✓ Gradle wrapper ready"
 
       - name: Build Android Release APK
         run: |
           cd android-host
-          ./gradlew assembleRelease --no-daemon --stacktrace
-          echo "✓ APK build complete"
+          gradle assembleRelease --no-daemon
 
       - name: Upload APK Artifact
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: SideInstaller-Android-Host-APK
           path: android-host/app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
-          retention-days: 30

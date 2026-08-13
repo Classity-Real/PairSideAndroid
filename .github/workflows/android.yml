@@ -22,7 +22,9 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'gradle'
+
+      - name: Set up Gradle Action
+        uses: gradle/actions/setup-gradle@v3
 
       - name: Install Rust Toolchain & Android Targets
         uses: dtolnay/rust-toolchain@stable
@@ -85,33 +87,21 @@ jobs:
           cd - > /dev/null
           echo "✓ Rust FFI build complete"
 
-      - name: Verify Native Libraries
+      - name: Ensure Gradle Wrapper Exists
         run: |
-          echo "Checking built native libraries..."
-          find android-host/app/src/main/jniLibs -type f -name "*.so" || true
-          ls -lR android-host/app/src/main/jniLibs/ || echo "jniLibs directory empty"
-
-      - name: Grant Executable Permission for Gradle
-        run: |
-          if [ -f "android-host/gradlew" ]; then
-            chmod +x android-host/gradlew
-            echo "✓ Gradle wrapper made executable"
-          else
-            echo "❌ ERROR: gradlew not found at android-host/gradlew"
-            exit 1
+          cd android-host
+          if [ ! -f "gradlew" ]; then
+            echo "⚠ gradlew missing. Generating Gradle wrapper automatically..."
+            gradle wrapper
           fi
+          chmod +x gradlew
+          echo "✓ Gradle wrapper ready"
 
       - name: Build Android Release APK
         run: |
           cd android-host
           ./gradlew assembleRelease --no-daemon --stacktrace
           echo "✓ APK build complete"
-
-      - name: List Build Outputs
-        if: always()
-        run: |
-          echo "APK outputs:"
-          find android-host/app/build/outputs/apk/release -type f -name "*.apk" || echo "No APKs found"
 
       - name: Upload APK Artifact
         if: success()
@@ -121,13 +111,3 @@ jobs:
           path: android-host/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 30
-
-      - name: Upload Build Logs on Failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: |
-            android-host/app/build/outputs/
-            android-host/build/reports/
-          if-no-files-found: ignore

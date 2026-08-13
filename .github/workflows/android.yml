@@ -62,12 +62,14 @@ jobs:
       - name: Build Android Release APK
         run: |
           cd android-host
-          ./gradlew --debug assembleRelease 2>&1 | tee build.log
+          gradle --version
+          gradle assembleRelease --no-daemon 2>&1 | tee build.log
           
           # If build fails, show the problems report
           if [ ! -f "app/build/outputs/apk/release"/*.apk ]; then
             echo "=== BUILD FAILED - Showing resources error details ==="
             find . -name "problems-report.html" -exec cat {} \;
+            tail -100 build.log
             exit 1
           fi
 

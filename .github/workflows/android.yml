@@ -2,10 +2,11 @@ name: Build Android Host App & Rust Core
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
     tags: [ 'v*' ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
 jobs:
   build-android:
@@ -13,11 +14,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout repository
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Set up Java JDK 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -25,17 +24,14 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      # 3. Set up Rust toolchain and add Android targets
       - name: Install Rust Toolchain & Android Targets
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android, x86_64-linux-android
 
-      # 4. Install cargo-ndk tool
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
-      # 5. Cross-compile Rust core (or generate fallback if missing)
       - name: Build Rust FFI for Android
         run: |
           mkdir -p android-host/app/src/main/jniLibs
@@ -43,7 +39,6 @@ jobs:
           NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -n 1)
           echo "Using Android NDK at: $NDK_PATH"
 
-          # Search for Cargo.toml
           FOUND_MANIFEST=$(find . -maxdepth 3 -name "Cargo.toml" | head -n 1)
 
           if [ -n "$FOUND_MANIFEST" ]; then
@@ -53,7 +48,6 @@ jobs:
             echo "Cargo.toml NOT FOUND! Generating fallback core-ffi crate..."
             mkdir -p core-ffi/src
             
-            # Generate fallback Cargo.toml
             cat << 'EOF' > core-ffi/Cargo.toml
 [package]
 name = "core_ffi"
@@ -66,18 +60,14 @@ crate-type = ["cdylib"]
 [dependencies]
 EOF
 
-            # Generate fallback lib.rs
             cat << 'EOF' > core-ffi/src/lib.rs
 #[no_mangle]
-pub extern "C" fn sideinstaller_init() {
-    // Fallback FFI entrypoint
-}
+pub extern "C" fn sideinstaller_init() {}
 EOF
 
             CARGO_DIR="core-ffi"
           fi
 
-          # Navigate into crate directory and compile
           cd "$CARGO_DIR"
           
           ANDROID_NDK_HOME=$NDK_PATH cargo ndk \
@@ -86,17 +76,14 @@ EOF
             -o ../android-host/app/src/main/jniLibs \
             -- build --release
 
-      # 6. Grant execute permission for Gradle wrapper
       - name: Grant Executable Permission for Gradle
         run: chmod +x android-host/gradlew
 
-      # 7. Build release APK with Gradle
       - name: Build Android Release APK
         run: |
           cd android-host
           ./gradlew assembleRelease --no-daemon
 
-      # 8. Upload APK as GitHub Build Artifact
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:

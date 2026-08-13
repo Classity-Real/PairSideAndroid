@@ -59,12 +59,22 @@ jobs:
           cd "$CARGO_DIR"
           ANDROID_NDK_HOME="$NDK_PATH" cargo ndk -t arm64-v8a -t x86_64 -o ../android-host/app/src/main/jniLibs -- build --release
 
-      - name: Build Android Release APK
-        run: |
+    name: Build Android Release APK
+    run: |
           cd android-host
           echo "android.useAndroidX=true" >> gradle.properties
           echo "android.enableJetifier=true" >> gradle.properties
+          
+          mkdir -p app/src/main
+          cat <<EOF > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application />
+          </manifest>
+          EOF
+          
           gradle assembleRelease --no-daemon
+
 
 
       - name: Upload APK Artifact

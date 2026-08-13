@@ -27,28 +27,39 @@ jobs:
       - name: Install Rust Toolchain & Android Targets
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android, x86_64-linux-android
+          targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
       - name: Build Rust FFI for Android
         run: |
+          set -e
+          set -x
+          
+          # Create output directory
           mkdir -p android-host/app/src/main/jniLibs
+          echo "✓ Created jniLibs directory"
 
-          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -n 1)
-          echo "Using Android NDK at: $NDK_PATH"
+          # Find and validate NDK path
+          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$NDK_PATH" ]; then
+            echo "❌ ERROR: Android NDK not found at $ANDROID_SDK_ROOT/ndk/"
+            exit 1
+          fi
+          echo "✓ Using Android NDK at: $NDK_PATH"
 
-          FOUND_MANIFEST=$(find . -maxdepth 3 -name "Cargo.toml" | head -n 1)
+          # Look for existing Cargo.toml
+          FOUND_MANIFEST=$(find . -maxdepth 3 -name "Cargo.toml" -type f | head -n 1)
 
           if [ -n "$FOUND_MANIFEST" ]; then
             CARGO_DIR=$(dirname "$FOUND_MANIFEST")
-            echo "Found existing Cargo.toml at: $FOUND_MANIFEST"
+            echo "✓ Found existing Cargo.toml at: $FOUND_MANIFEST"
           else
-            echo "Cargo.toml NOT FOUND! Generating fallback core-ffi crate..."
+            echo "⚠ Cargo.toml NOT FOUND! Generating fallback core-ffi crate..."
             mkdir -p core-ffi/src
             
-            cat << 'EOF' > core-ffi/Cargo.toml
+            cat > core-ffi/Cargo.toml << 'EOF'
 [package]
 name = "core_ffi"
 version = "0.1.0"
@@ -60,32 +71,73 @@ crate-type = ["cdylib"]
 [dependencies]
 EOF
 
-            cat << 'EOF' > core-ffi/src/lib.rs
+            cat > core-ffi/src/lib.rs << 'EOF'
 #[no_mangle]
-pub extern "C" fn sideinstaller_init() {}
+pub extern "C" fn sideinstaller_init() {
+    // Initialize core FFI
+}
 EOF
 
             CARGO_DIR="core-ffi"
+            echo "✓ Generated fallback Cargo project"
           fi
 
+          # Build Rust for Android targets
           cd "$CARGO_DIR"
+          echo "✓ Building Rust FFI for Android..."
           
-          ANDROID_NDK_HOME=$NDK_PATH cargo ndk \
+          ANDROID_NDK_HOME="$NDK_PATH" cargo ndk \
             -t arm64-v8a \
             -t x86_64 \
-            -o ../android-host/app/src/main/jniLibs \
+            -o "../../android-host/app/src/main/jniLibs" \
             -- build --release
+          
+          cd - > /dev/null
+          echo "✓ Rust FFI build complete"
+
+      - name: Verify Native Libraries
+        run: |
+          echo "Checking built native libraries..."
+          find android-host/app/src/main/jniLibs -type f -name "*.so" || true
+          ls -lR android-host/app/src/main/jniLibs/ || echo "jniLibs directory empty"
 
       - name: Grant Executable Permission for Gradle
-        run: chmod +x android-host/gradlew
+        run: |
+          if [ -f "android-host/gradlew" ]; then
+            chmod +x android-host/gradlew
+            echo "✓ Gradle wrapper made executable"
+          else
+            echo "❌ ERROR: gradlew not found at android-host/gradlew"
+            exit 1
+          fi
 
       - name: Build Android Release APK
         run: |
           cd android-host
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          echo "✓ APK build complete"
+
+      - name: List Build Outputs
+        if: always()
+        run: |
+          echo "APK outputs:"
+          find android-host/app/build/outputs/apk/release -type f -name "*.apk" || echo "No APKs found"
 
       - name: Upload APK Artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: SideInstaller-Android-Host-APK
           path: android-host/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Build Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            android-host/app/build/outputs/
+            android-host/build/reports/
+          if-no-files-found: ignore

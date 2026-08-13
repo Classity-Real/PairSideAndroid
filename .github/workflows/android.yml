@@ -35,18 +35,20 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
-      # 5. Cross-compile Rust core into Android .so shared libraries
-      # Using the pre-installed Android NDK on the runner
+            # 5. Cross-compile Rust core into Android .so shared libraries
       - name: Build Rust FFI for Android
         run: |
           mkdir -p android-host/app/src/main/jniLibs
           
-          # Find pre-installed NDK path dynamically if needed
           NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -n 1)
           echo "Using Android NDK at: $NDK_PATH"
           
-          cd core-ffi
-          ANDROID_NDK_HOME=$NDK_PATH cargo ndk -t arm64-v8a -t x86_64 -o ../android-host/app/src/main/jniLibs build --release
+          # Pass --manifest-path explicitly so cargo never loses track of Cargo.toml
+          ANDROID_NDK_HOME=$NDK_PATH cargo ndk \
+            -t arm64-v8a -t x86_64 \
+            -o android-host/app/src/main/jniLibs \
+            build --manifest-path core-ffi/Cargo.toml --release
+
 
       # 6. Grant execute permission for Gradle wrapper
       - name: Grant Executable Permission for Gradle

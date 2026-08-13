@@ -25,40 +25,40 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      # 3. Set up Android NDK
-      - name: Set up Android NDK
-        uses: n swell/setup-android-ndk@v1
-        with:
-          ndk-version: r26b
-
-      # 4. Set up Rust toolchain and add Android targets
+      # 3. Set up Rust toolchain and add Android targets
       - name: Install Rust Toolchain & Android Targets
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android, x86_64-linux-android
 
-      # 5. Install cargo-ndk tool
+      # 4. Install cargo-ndk tool
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
-      # 6. Cross-compile Rust core into Android .so shared libraries
+      # 5. Cross-compile Rust core into Android .so shared libraries
+      # Using the pre-installed Android NDK on the runner
       - name: Build Rust FFI for Android
         run: |
           mkdir -p android-host/app/src/main/jniLibs
+          
+          # Find pre-installed NDK path dynamically if needed
+          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -n 1)
+          echo "Using Android NDK at: $NDK_PATH"
+          
           cd core-ffi
-          cargo ndk -t arm64-v8a -t x86_64 -o ../android-host/app/src/main/jniLibs build --release
+          ANDROID_NDK_HOME=$NDK_PATH cargo ndk -t arm64-v8a -t x86_64 -o ../android-host/app/src/main/jniLibs build --release
 
-      # 7. Grant execute permission for Gradle wrapper
+      # 6. Grant execute permission for Gradle wrapper
       - name: Grant Executable Permission for Gradle
         run: chmod +x android-host/gradlew
 
-      # 8. Build release APK with Gradle
+      # 7. Build release APK with Gradle
       - name: Build Android Release APK
         run: |
           cd android-host
           ./gradlew assembleRelease --no-daemon
 
-      # 9. Upload APK as GitHub Build Artifact
+      # 8. Upload APK as GitHub Build Artifact
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:

@@ -1,105 +1,94 @@
-name: Build Android Host App & Rust Core
+name: Build
 
 on:
-  push:
-    branches: [ "main", "master" ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ "main", "master" ]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. v1.2.0) — becomes the release tag AND the app versionName'
+        required: true
+        type: string
+      changelog:
+        description: 'Changelog for this release (used as-is as the release notes)'
+        required: true
+        type: string
+      build_type:
+        description: 'Build type'
+        required: true
+        type: choice
+        options:
+          - debug
+          - release
+        default: debug
+      apk_name:
+        description: 'Base filename for the output APK (without version/extension)'
+        required: true
+        type: string
+        default: 'PExt'
+
+env:
+  GRADLE_VERSION: "9.4.0"
+
+permissions:
+  contents: write
 
 jobs:
-  build-android:
-    name: Build Android APK & Native Libraries
+  build:
+    name: Build & Release
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
+          distribution: temurin
           java-version: '17'
-          distribution: 'temurin'
-          cache: 'gradle'
 
-      - name: Install Rust Toolchain & Android Targets
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,x86_64-linux-android
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
-
-      - name: Build Rust FFI for Android
+      - name: Download and install Gradle ${{ env.GRADLE_VERSION }}
         run: |
-          mkdir -p android-host/app/src/main/jniLibs
+          mkdir -p "$HOME/.gradle-dist"
+          curl -fsSL -o /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+          unzip -q /tmp/gradle.zip -d "$HOME/.gradle-dist"
+          rm /tmp/gradle.zip
+          echo "$HOME/.gradle-dist/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
 
-          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -n 1)
-          echo "Using Android NDK at: $NDK_PATH"
-
-          FOUND_MANIFEST=$(find . -maxdepth 3 -name "Cargo.toml" | head -n 1)
-
-          if [ -n "$FOUND_MANIFEST" ]; then
-            CARGO_DIR=$(dirname "$FOUND_MANIFEST")
-            echo "Found existing Cargo.toml at: $FOUND_MANIFEST"
-          else
-            echo "Cargo.toml NOT FOUND! Generating fallback core-ffi crate..."
-            mkdir -p core-ffi/src
-
-            cat << 'EOF' > core-ffi/Cargo.toml
-[package]
-name = "core_ffi"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-EOF
-
-            cat << 'EOF' > core-ffi/src/lib.rs
-#[no_mangle]
-pub extern "C" fn sideinstaller_init() {}
-EOF
-
-            CARGO_DIR="core-ffi"
-          fi
-
-          cd "$CARGO_DIR"
-
-          ANDROID_NDK_HOME=$NDK_PATH cargo ndk \
-            -t arm64-v8a \
-            -t x86_64 \
-            -o ../android-host/app/src/main/jniLibs \
-            -- build --release
-
-      - name: Ensure Gradle Wrapper Exists
+      - name: Compute version properties
+        id: version
         run: |
-          cd android-host
+          echo "version_name=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
-          if [ ! -f "gradlew" ]; then
-            if command -v gradle &> /dev/null; then
-              gradle wrapper --gradle-version 8.5
-            else
-              curl -fsSL -o gradle.zip https://services.gradle.org/distributions/gradle-8.5-bin.zip
-              unzip -q gradle.zip
-              ./gradle-8.5/bin/gradle wrapper --gradle-version 8.5
-              rm -rf gradle.zip gradle-8.5
-            fi
-          fi
+      - name: Build ${{ inputs.build_type }} APK
+        run: >
+          gradle assemble${{ inputs.build_type == 'release' && 'Release' || 'Debug' }} --no-daemon
+          -PappVersionName=${{ steps.version.outputs.version_name }}
+          -PappVersionCode=${{ steps.version.outputs.version_code }}
 
-          chmod +x gradlew
-
-      - name: Build Android Release APK
+      - name: Rename output APK
+        id: apk
         run: |
-          cd android-host
-          ./gradlew assembleRelease --no-daemon
+          SRC="app/build/outputs/apk/${{ inputs.build_type }}/app-${{ inputs.build_type }}.apk"
+          OUT_NAME="${{ inputs.apk_name }}-${{ inputs.version }}.apk"
+          cp "$SRC" "$OUT_NAME"
+          echo "apk_path=$OUT_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SideInstaller-Android-Host-APK
-          path: android-host/app/build/outputs/apk/release/*.apk
+          name: ${{ inputs.apk_name }}-${{ inputs.version }}
+          path: ${{ steps.apk.outputs.apk_path }}
+          if-no-files-found: warn
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.changelog }}
+        run: |
+          printf '%s\n' "$RELEASE_NOTES" > release_notes.md
+          gh release create "$RELEASE_VERSION" \
+            "${{ steps.apk.outputs.apk_path }}" \
+            --title "$RELEASE_VERSION" \
+            --notes-file release_notes.md

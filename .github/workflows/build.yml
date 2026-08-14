@@ -54,8 +54,10 @@ jobs:
       - name: Compute version properties
         id: version
         run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           echo "version_name=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
           echo "version_code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Build ${{ inputs.build_type }} APK
         run: >
@@ -63,10 +65,18 @@ jobs:
           -PappVersionName=${{ steps.version.outputs.version_name }}
           -PappVersionCode=${{ steps.version.outputs.version_code }}
 
+      - name: Rename output APK
+        id: apk
+        run: |
+          SRC="android-host/app/build/outputs/apk/${{ inputs.build_type }}/app-${{ inputs.build_type }}.apk"
+          OUT_NAME="SideHost-${{ inputs.version }}-${{ steps.version.outputs.short_sha }}.apk"
+          cp "$SRC" "$OUT_NAME"
+          echo "apk_path=$OUT_NAME" >> "$GITHUB_OUTPUT"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.apk_name }}-${{ inputs.version }}
+          name: SideHost-${{ inputs.version }}-${{ steps.version.outputs.short_sha }}
           path: ${{ steps.apk.outputs.apk_path }}
           if-no-files-found: warn
 
@@ -77,6 +87,8 @@ jobs:
           RELEASE_NOTES: ${{ inputs.changelog }}
         run: |
           printf '%s\n' "$RELEASE_NOTES" > release_notes.md
+          echo "" >> release_notes.md
+          echo "**Commit:** ${{ github.sha }}" >> release_notes.md
           gh release create "$RELEASE_VERSION" \
             "${{ steps.apk.outputs.apk_path }}" \
             --title "$RELEASE_VERSION" \

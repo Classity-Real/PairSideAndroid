@@ -13,6 +13,20 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        ref: main
+
+    - name: Verify Android project files exist
+      run: |
+        echo "Checking for AndroidManifest.xml..."
+        find android-host -name "AndroidManifest.xml" -exec ls -la {} \;
+        if [ ! -f "android-host/app/src/main/AndroidManifest.xml" ]; then
+          echo "::error::AndroidManifest.xml is missing at android-host/app/src/main/AndroidManifest.xml"
+          echo "Contents of android-host/app/src/main:"
+          ls -la android-host/app/src/main/ || echo "main/ directory does not exist"
+          exit 1
+        fi
+        echo "Manifest found."
 
     - name: Set up JDK 17
       uses: actions/setup-java@v4

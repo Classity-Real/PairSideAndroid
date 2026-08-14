@@ -1,19 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <!-- Permissions required for Wi-Fi / Hotspot Bonjour broadcasting -->
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+<manifest xmlns:android="http://schemas.android.com/res/auto">
 
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="SideInstaller Host"
-        android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        
+        android:label="PairSideAndroid"
+        android:theme="@style/Theme.AppCompat">
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -22,6 +14,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
     </application>
 
 </manifest>

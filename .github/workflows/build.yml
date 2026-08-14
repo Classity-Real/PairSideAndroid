@@ -4,14 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. v1.2.0) — becomes the release tag AND the app versionName'
-        required: true
-        type: string
-      changelog:
-        description: 'Changelog for this release (used as-is as the release notes)'
+        description: 'Version'
         required: true
         type: string
         default: '1.0'
+      changelog:
+        description: 'Put Changelog (use notepad++ to use special character)'
+        required: true
+        type: string
+        default: 'First Release'
       build_type:
         description: 'Build type'
         required: true
@@ -20,11 +21,6 @@ on:
           - debug
           - release
         default: debug
-      apk_name:
-        description: 'Base filename for the output APK (without version/extension)'
-        required: true
-        type: string
-        default: 'SideHost'
 
 env:
   GRADLE_VERSION: "8.9"
@@ -66,14 +62,6 @@ jobs:
           gradle assemble${{ inputs.build_type == 'release' && 'Release' || 'Debug' }} --no-daemon
           -PappVersionName=${{ steps.version.outputs.version_name }}
           -PappVersionCode=${{ steps.version.outputs.version_code }}
-
-      - name: Rename output APK
-        id: apk
-        run: |
-          SRC="app/build/outputs/apk/${{ inputs.build_type }}/app-${{ inputs.build_type }}.apk"
-          OUT_NAME="${{ inputs.apk_name }}-${{ inputs.version }}.apk"
-          cp "$SRC" "$OUT_NAME"
-          echo "apk_path=$OUT_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

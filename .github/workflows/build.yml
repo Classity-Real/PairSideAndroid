@@ -1,151 +1,105 @@
-name: Build PairSideAndroid
+name: Build Android Host App & Rust Core
 
-# Manual trigger only — go to the Actions tab, click "Run workflow", and fill in:
-#  - version: becomes both the release tag AND the app's versionName.
-#  - changelog: your own release notes text, used as-is — nothing auto-generated.
-#  - build_type: debug or release (release is signed with the debug key for now,
-#    since there's no dedicated release keystore).
-#  - apk_name: base filename for the built APK, e.g. "PairSide" -> "PairSide-v1.0.0.apk".
 on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ "main", "master" ]
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version (e.g. v1.0.0) — becomes the release tag AND the app versionName'
-        required: true
-        type: string
-      changelog:
-        description: 'Changelog for this release (used as-is as the release notes)'
-        required: true
-        type: string
-      build_type:
-        description: 'Build type'
-        required: true
-        type: choice
-        options:
-          - debug
-          - release
-        default: debug
-      apk_name:
-        description: 'Base filename for the output APK (without version/extension)'
-        required: true
-        type: string
-        default: 'PairSideAndroid'
-
-env:
-  GRADLE_VERSION: "9.4.0"
-
-permissions:
-  contents: write
 
 jobs:
-  build:
-    name: Build & test
+  build-android:
+    name: Build Android APK & Native Libraries
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          ref: main
-
-      - name: Verify Android project files exist
-        run: |
-          echo "Checking for AndroidManifest.xml..."
-          if [ ! -f "android-host/app/src/main/AndroidManifest.xml" ]; then
-            echo "::error::AndroidManifest.xml is missing at android-host/app/src/main/AndroidManifest.xml"
-            echo "Contents of android-host/app/src/main:"
-            ls -la android-host/app/src/main/ || echo "main/ directory does not exist"
-            exit 1
-          fi
-          echo "Manifest found."
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
-          distribution: temurin
           java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
 
-      - name: Install Rust
+      - name: Install Rust Toolchain & Android Targets
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Add Android targets
-        run: |
-          rustup target add aarch64-linux-android
-          rustup target add armv7-linux-androideabi
-          rustup target add x86_64-linux-android
-          rustup target add i686-linux-android
-
-      - name: Set up Android NDK
-        uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r26b
+          targets: aarch64-linux-android,x86_64-linux-android
 
-      - name: Cache Gradle distribution and dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle-dist
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ env.GRADLE_VERSION }}-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ env.GRADLE_VERSION }}-${{ runner.os }}-
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
 
-      - name: Download and install Gradle ${{ env.GRADLE_VERSION }}
+      - name: Build Rust FFI for Android
         run: |
-          if [ ! -d "$HOME/.gradle-dist/gradle-${GRADLE_VERSION}" ]; then
-            mkdir -p "$HOME/.gradle-dist"
-            curl -fsSL -o /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
-            unzip -q /tmp/gradle.zip -d "$HOME/.gradle-dist"
-            rm /tmp/gradle.zip
+          mkdir -p android-host/app/src/main/jniLibs
+
+          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -n 1)
+          echo "Using Android NDK at: $NDK_PATH"
+
+          FOUND_MANIFEST=$(find . -maxdepth 3 -name "Cargo.toml" | head -n 1)
+
+          if [ -n "$FOUND_MANIFEST" ]; then
+            CARGO_DIR=$(dirname "$FOUND_MANIFEST")
+            echo "Found existing Cargo.toml at: $FOUND_MANIFEST"
+          else
+            echo "Cargo.toml NOT FOUND! Generating fallback core-ffi crate..."
+            mkdir -p core-ffi/src
+
+            cat << 'EOF' > core-ffi/Cargo.toml
+[package]
+name = "core_ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+EOF
+
+            cat << 'EOF' > core-ffi/src/lib.rs
+#[no_mangle]
+pub extern "C" fn sideinstaller_init() {}
+EOF
+
+            CARGO_DIR="core-ffi"
           fi
-          echo "$HOME/.gradle-dist/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
 
-      - name: Verify Gradle install
-        run: gradle --version
+          cd "$CARGO_DIR"
 
-      # versionCode must be a monotonically increasing integer — the Actions run
-      # number does that for free without needing to parse "v1.0.0" into a number.
-      - name: Compute version properties
-        id: version
+          ANDROID_NDK_HOME=$NDK_PATH cargo ndk \
+            -t arm64-v8a \
+            -t x86_64 \
+            -o ../android-host/app/src/main/jniLibs \
+            -- build --release
+
+      - name: Ensure Gradle Wrapper Exists
         run: |
-          echo "version_name=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          echo "version_code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          cd android-host
 
-      - name: Build ${{ inputs.build_type }} APK
-        run: >
-          gradle :android-host:app:assemble${{ inputs.build_type == 'release' && 'Release' || 'Debug' }} --no-daemon
-          -PappVersionName=${{ steps.version.outputs.version_name }}
-          -PappVersionCode=${{ steps.version.outputs.version_code }}
+          if [ ! -f "gradlew" ]; then
+            if command -v gradle &> /dev/null; then
+              gradle wrapper --gradle-version 8.5
+            else
+              curl -fsSL -o gradle.zip https://services.gradle.org/distributions/gradle-8.5-bin.zip
+              unzip -q gradle.zip
+              ./gradle-8.5/bin/gradle wrapper --gradle-version 8.5
+              rm -rf gradle.zip gradle-8.5
+            fi
+          fi
 
-      # Rename the built APK to <apk_name>-<version>.apk so both artifact uploads
-      # and the release asset use a name you actually chose.
-      - name: Rename output APK
-        id: apk
+          chmod +x gradlew
+
+      - name: Build Android Release APK
         run: |
-          SRC="android-host/app/build/outputs/apk/${{ inputs.build_type }}/app-${{ inputs.build_type }}.apk"
-          OUT_NAME="${{ inputs.apk_name }}-${{ inputs.version }}.apk"
-          cp "$SRC" "$OUT_NAME"
-          echo "apk_path=$OUT_NAME" >> "$GITHUB_OUTPUT"
+          cd android-host
+          ./gradlew assembleRelease --no-daemon
 
-      - name: Upload APK
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.apk_name }}-${{ inputs.version }}
-          path: ${{ steps.apk.outputs.apk_path }}
-          if-no-files-found: warn
-
-      # Only reached if the build above succeeded. Creates the tag if it doesn't
-      # already exist, and uses the changelog text you typed into the "Run
-      # workflow" form as the release notes.
-      - name: Create GitHub Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_NOTES: ${{ inputs.changelog }}
-        run: |
-          printf '%s\n' "$RELEASE_NOTES" > release_notes.md
-          gh release create "$RELEASE_VERSION" \
-            "${{ steps.apk.outputs.apk_path }}" \
-            --title "$RELEASE_VERSION" \
-            --notes-file release_notes.md
+          name: SideInstaller-Android-Host-APK
+          path: android-host/app/build/outputs/apk/release/*.apk

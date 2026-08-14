@@ -15,5 +15,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "SideInstaller"
-include ':android-host:app'
-project(':android-host:app').projectDir = file('android-host/app')
+include(":android-host:app")
+project(":android-host:app").projectDir = file("android-host/app")

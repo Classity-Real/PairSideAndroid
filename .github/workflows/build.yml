@@ -1,82 +1,155 @@
 name: Build
 
+# Manual trigger only — go to the Actions tab, click "Run workflow", and fill in:
+#  - version: becomes both the release tag AND the app's versionName (e.g. what
+#    shows in Settings > Apps > PExt), replacing the old hardcoded "0.1.0".
+#  - changelog: your own release notes text, used as-is — nothing auto-generated.
+#  - build_type: debug or release (release is signed with the debug key for now,
+#    since there's no dedicated release keystore — see app/build.gradle.kts).
+#  - apk_name: base filename for the built APK, e.g. "PExt" -> "PExt-v1.2.0.apk".
 on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main, develop ]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. v1.2.0) — becomes the release tag AND the app versionName'
+        required: true
+        type: string
+      changelog:
+        description: 'Changelog for this release (used as-is as the release notes)'
+        required: true
+        type: string
+      build_type:
+        description: 'Build type'
+        required: true
+        type: choice
+        options:
+          - debug
+          - release
+        default: debug
+      apk_name:
+        description: 'Base filename for the output APK (without version/extension)'
+        required: true
+        type: string
+        default: 'PExt'
+
+env:
+  # Pinned to match the Gradle version verified working in Codespaces (sdkman's
+  # default), so Actions and local dev builds against the exact same toolchain
+  # instead of whatever setup-gradle auto-detects.
+  GRADLE_VERSION: "9.4.0"
+
+permissions:
+  contents: write
 
 jobs:
   build:
+    name: Build & test
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: main
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Verify Android project files exist
-      run: |
-        echo "Checking for AndroidManifest.xml..."
-        find android-host -name "AndroidManifest.xml" -exec ls -la {} \;
-        if [ ! -f "android-host/app/src/main/AndroidManifest.xml" ]; then
-          echo "::error::AndroidManifest.xml is missing at android-host/app/src/main/AndroidManifest.xml"
-          echo "Contents of android-host/app/src/main:"
-          ls -la android-host/app/src/main/ || echo "main/ directory does not exist"
-          exit 1
-        fi
-        echo "Manifest found."
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: gradle
+      - name: Cache Gradle distribution and dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle-dist
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ env.GRADLE_VERSION }}-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ env.GRADLE_VERSION }}-${{ runner.os }}-
 
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+      - name: Download and install Gradle ${{ env.GRADLE_VERSION }}
+        run: |
+          if [ ! -d "$HOME/.gradle-dist/gradle-${GRADLE_VERSION}" ]; then
+            mkdir -p "$HOME/.gradle-dist"
+            curl -fsSL -o /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+            unzip -q /tmp/gradle.zip -d "$HOME/.gradle-dist"
+            rm /tmp/gradle.zip
+          fi
+          echo "$HOME/.gradle-dist/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
 
-    - name: Add Android targets
-      run: |
-        rustup target add aarch64-linux-android
-        rustup target add armv7-linux-androideabi
-        rustup target add x86_64-linux-android
-        rustup target add i686-linux-android
+      - name: Verify Gradle install
+        run: gradle --version
 
-    - name: Set up Android NDK
-      uses: nttld/setup-ndk@v1
-      with:
-        ndk-version: r26b
+      # versionCode must be a monotonically increasing integer — the Actions run
+      # number does that for free without needing to parse "v1.2.0" into a number.
+      - name: Compute version properties
+        id: version
+        run: |
+          echo "version_name=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
-    - name: Build with Gradle
-      run: gradle build
+      - name: Run Android Lint
+        run: >
+          gradle lint${{ inputs.build_type == 'release' && 'Release' || 'Debug' }} --no-daemon
+          -PappVersionName=${{ steps.version.outputs.version_name }}
+          -PappVersionCode=${{ steps.version.outputs.version_code }}
 
-    - name: Build Release APK
-      run: gradle assembleRelease
+      - name: Run unit tests
+        run: >
+          gradle test${{ inputs.build_type == 'release' && 'Release' || 'Debug' }}UnitTest --no-daemon
+          -PappVersionName=${{ steps.version.outputs.version_name }}
+          -PappVersionCode=${{ steps.version.outputs.version_code }}
 
-    - name: Build Release Bundle
-      run: gradle bundleRelease
+      - name: Build ${{ inputs.build_type }} APK
+        run: >
+          gradle assemble${{ inputs.build_type == 'release' && 'Release' || 'Debug' }} --no-daemon
+          -PappVersionName=${{ steps.version.outputs.version_name }}
+          -PappVersionCode=${{ steps.version.outputs.version_code }}
 
-    - name: Upload APK artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-release.apk
-        path: android-host/build/outputs/apk/release/
+      # Rename the built APK to <apk_name>-<version>.apk so both artifact uploads
+      # and the release asset use a name you actually chose, not app-debug.apk.
+      - name: Rename output APK
+        id: apk
+        run: |
+          SRC="app/build/outputs/apk/${{ inputs.build_type }}/app-${{ inputs.build_type }}.apk"
+          OUT_NAME="${{ inputs.apk_name }}-${{ inputs.version }}.apk"
+          cp "$SRC" "$OUT_NAME"
+          echo "apk_path=$OUT_NAME" >> "$GITHUB_OUTPUT"
 
-    - name: Upload Bundle artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-release.aab
-        path: android-host/build/outputs/bundle/release/
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.apk_name }}-${{ inputs.version }}
+          path: ${{ steps.apk.outputs.apk_path }}
+          if-no-files-found: warn
 
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          android-host/build/outputs/apk/release/*.apk
-          android-host/build/outputs/bundle/release/*.aab
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-*.html
+          if-no-files-found: ignore
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/test${{ inputs.build_type == 'release' && 'Release' || 'Debug' }}UnitTest/
+          if-no-files-found: ignore
+
+      # Only reached if lint/tests/build above all succeeded. Creates the tag if it
+      # doesn't already exist, and uses the changelog text you typed into the
+      # "Run workflow" form as the release notes — no auto-generated notes here.
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.changelog }}
+        run: |
+          printf '%s\n' "$RELEASE_NOTES" > release_notes.md
+          gh release create "$RELEASE_VERSION" \
+            "${{ steps.apk.outputs.apk_path }}" \
+            --title "$RELEASE_VERSION" \
+            --notes-file release_notes.md

@@ -11,6 +11,7 @@ on:
         description: 'Changelog for this release (used as-is as the release notes)'
         required: true
         type: string
+        default: '1.0'
       build_type:
         description: 'Build type'
         required: true
@@ -23,10 +24,10 @@ on:
         description: 'Base filename for the output APK (without version/extension)'
         required: true
         type: string
-        default: 'PExt'
+        default: 'SideHost'
 
 env:
-  GRADLE_VERSION: "9.4.0"
+  GRADLE_VERSION: "8.9"
 
 permissions:
   contents: write

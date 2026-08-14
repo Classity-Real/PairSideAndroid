@@ -3,7 +3,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="SideInstaller Host"
+        android:label="SideAndroid"
         android:supportsRtl="true">
 
         <activity

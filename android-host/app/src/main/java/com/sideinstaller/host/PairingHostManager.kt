@@ -17,7 +17,8 @@ class PairingHostManager(private val context: Context) {
     companion object {
         private const val TAG = "PairingHostManager"
     }
-
+    
+    private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
     private var nsdManager: NsdManager? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var serverSocket: ServerSocket? = null

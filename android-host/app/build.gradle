@@ -11,14 +11,15 @@ android {
         applicationId "com.sideinstaller.host"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode project.hasProperty('appVersionCode') ? (project.property('appVersionCode') as Integer) : 1
+        versionName project.hasProperty('appVersionName') ? project.property('appVersionName') : "1.0"
     }
 
     buildTypes {
         release {
             debuggable false
             minifyEnabled false
+            signingConfig signingConfigs.debug
         }
     }
 

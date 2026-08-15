@@ -161,4 +161,17 @@ class PairingHostManager(private val context: Context) {
                 if (intf.isUp && !intf.isLoopback) {
                     for (addr in intf.inetAddresses) {
                         if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                            val ip = addr.hostAddress ?: contin
+                            val ip = addr.hostAddress ?: continue
+                            if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) {
+                                return ip
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting IP address", e)
+        }
+        return "127.0.0.1"
+    }
+}

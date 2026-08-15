@@ -8,17 +8,10 @@ import java.math.BigInteger
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 /**
  * Responder side of Apple's rppairing protocol (device-initiated pairing).
  * Ported from pymobiledevice3's PairableHost (tunnel_service.py).
- *
- * This class handles the socket-level framing and the SRP pair-setup
- * handshake (M1-M4). Identity exchange (M5/M6, which needs opack encoding)
- * is wired in separately.
  */
 class PairableHost(
     private val socket: Socket,
@@ -34,11 +27,9 @@ class PairableHost(
     private val output = DataOutputStream(socket.getOutputStream())
     private var sequenceNumber = 0
 
-    // Populated once pair-setup completes.
     var sessionKey: ByteArray? = null
         private set
 
-    /** Runs the handshake, then the full SRP pair-setup. Returns the 6-digit PIN shown to the user. */
     fun acceptHandshakeAndSrp(onPinReady: (String) -> Unit): SrpSetupResult {
         handshake()
         return pairSetupSrpPhase(onPinReady)
@@ -99,14 +90,12 @@ class PairableHost(
     )
 
     private fun pairSetupSrpPhase(onPinReady: (String) -> Unit): SrpSetupResult {
-        // M1: device starts pair-setup
         Log.d(TAG, "Waiting for pair-setup M1")
         val m1 = TLV8.decode(receivePairingData())
         expectState(m1, 1)
 
-        // M2: send salt + server public (B)
         val saltBytes = ByteArray(16).also { SecureRandom().nextBytes(it) }
-        saltBytes[0] = (saltBytes[0].toInt() or 0x80).toByte() // keep stable 16-byte representation
+        saltBytes[0] = (saltBytes[0].toInt() or 0x80).toByte()
         val saltInt = BigInteger(1, saltBytes)
 
         val pin = String.format("%06d", SecureRandom().nextInt(1_000_000))
@@ -120,7 +109,6 @@ class PairableHost(
         while (true) {
             serverPrivate = srp.generateServerPrivate()
             serverPublic = srp.getServerPublic(verifier, serverPrivate)
-            // Match srptools' retry-until-full-width behavior for the 3072-bit group (384 bytes).
             if (unsignedByteLength(serverPublic) == 384) break
         }
 
@@ -135,7 +123,6 @@ class PairableHost(
         Log.d(TAG, "Sending pair-setup M2 (salt + B)")
         sendPairingData(TLV8.encode(m2Items))
 
-        // M3: device sends its public (A) and proof (M1 client proof)
         Log.d(TAG, "Waiting for pair-setup M3")
         val m3 = TLV8.decode(receivePairingData())
         ensureNoError(m3)
@@ -155,12 +142,11 @@ class PairableHost(
             Log.w(TAG, "SRP client proof verification failed (wrong PIN?)")
             sendPairingData(TLV8.encode(listOf(
                 TLVItem(TLVType.STATE, byteArrayOf(4)),
-                TLVItem(TLVType.ERROR, byteArrayOf(2)) // kTLVError_Authentication
+                TLVItem(TLVType.ERROR, byteArrayOf(2))
             )))
             throw PairingProtocolException("SRP authentication failed (wrong PIN?)")
         }
 
-        // M4: send server proof
         Log.d(TAG, "Sending pair-setup M4 (server proof)")
         val serverProof = srp.computeSessionKeyProofHash(clientPublic, clientProof, sessionKeyBytes)
         sendPairingData(TLV8.encode(listOf(
@@ -172,10 +158,95 @@ class PairableHost(
         return SrpSetupResult(srp, sessionKeyBytes, clientPublic)
     }
 
-    // ---- Helpers used by M5/M6 (wired in next) ----
+    // ---- M5/M6: identity exchange ----
 
-    fun sendPairingDataPublic(data: ByteArray) = sendPairingData(data)
-    fun receivePairingDataPublic(): ByteArray = receivePairingData()
+    data class PeerDeviceInfo(
+        val accountId: String,
+        val altIrk: ByteArray,
+        val model: String,
+        val name: String,
+        val udid: String
+    )
+
+    fun completeIdentityExchange(
+        srpResult: SrpSetupResult,
+        hostAltIrk: ByteArray,
+        ed25519: Ed25519KeyPair
+    ): PeerDeviceInfo {
+        val sessionKey = srpResult.sessionKey
+
+        val setupEncryptionKey = Hkdf.derive(
+            ikm = sessionKey,
+            salt = "Pair-Setup-Encrypt-Salt".toByteArray(Charsets.UTF_8),
+            info = "Pair-Setup-Encrypt-Info".toByteArray(Charsets.UTF_8),
+            length = 32
+        )
+
+        Log.d(TAG, "Waiting for pair-setup M5 (device identity)")
+        val m5 = TLV8.decode(receivePairingData())
+        ensureNoError(m5)
+        expectState(m5, 5)
+        val encryptedM5 = m5[TLVType.ENCRYPTED_DATA]
+            ?: throw PairingProtocolException("pair-setup M5 missing encrypted data")
+
+        val m5Nonce = "\u0000\u0000\u0000\u0000PS-Msg05".toByteArray(Charsets.US_ASCII)
+        val m5Plaintext = ChaChaCipher.decrypt(setupEncryptionKey, m5Nonce, encryptedM5)
+        val deviceTlv = TLV8.decode(m5Plaintext)
+
+        val infoBytes = deviceTlv[TLVType.INFO]
+            ?: throw PairingProtocolException("pair-setup M5 identity missing INFO field")
+        @Suppress("UNCHECKED_CAST")
+        val infoMap = OPackDecode.loads(infoBytes) as Map<String, Any>
+
+        val altIrk = infoMap["altIRK"] as? ByteArray
+            ?: throw PairingProtocolException("peer device info missing altIRK")
+        val peerDevice = PeerDeviceInfo(
+            accountId = infoMap["accountID"] as? String ?: "",
+            altIrk = altIrk,
+            model = infoMap["model"] as? String ?: "",
+            name = infoMap["name"] as? String ?: "",
+            udid = infoMap["remotepairing_udid"] as? String ?: ""
+        )
+
+        Log.d(TAG, "Sending pair-setup M6 (our identity)")
+        val accessoryX = Hkdf.derive(
+            ikm = sessionKey,
+            salt = "Pair-Setup-Accessory-Sign-Salt".toByteArray(Charsets.UTF_8),
+            info = "Pair-Setup-Accessory-Sign-Info".toByteArray(Charsets.UTF_8),
+            length = 32
+        )
+        val ltpk = ed25519.publicKeyRaw
+        val signBuf = accessoryX + identifier.toByteArray(Charsets.UTF_8) + ltpk
+        val signature = ed25519.sign(signBuf)
+
+        val deviceInfo = linkedMapOf<String, Any>(
+            "altIRK" to hostAltIrk,
+            "btAddr" to "11:22:33:44:55:66",
+            "mac" to byteArrayOf(0x11, 0x22, 0x33, 0x44, 0x55, 0x66),
+            "remotepairing_serial_number" to "AAAAAAAAAAAA",
+            "accountID" to identifier,
+            "model" to "Mac17,7",
+            "name" to hostName
+        )
+        val infoEncoded = OPack.dumps(deviceInfo)
+
+        val m6Plain = TLV8.encode(listOf(
+            TLVItem(TLVType.IDENTIFIER, identifier.toByteArray(Charsets.UTF_8)),
+            TLVItem(TLVType.PUBLIC_KEY, ltpk),
+            TLVItem(TLVType.SIGNATURE, signature),
+            TLVItem(TLVType.INFO, infoEncoded)
+        ))
+
+        val m6Nonce = "\u0000\u0000\u0000\u0000PS-Msg06".toByteArray(Charsets.US_ASCII)
+        val m6Cipher = ChaChaCipher.encrypt(setupEncryptionKey, m6Nonce, m6Plain)
+
+        val m6Items = mutableListOf<TLVItem>()
+        m6Items += TLV8.chunk(TLVType.ENCRYPTED_DATA, m6Cipher)
+        m6Items.add(TLVItem(TLVType.STATE, byteArrayOf(6)))
+        sendPairingData(TLV8.encode(m6Items))
+
+        return peerDevice
+    }
 
     // ---- Low-level framing ----
 

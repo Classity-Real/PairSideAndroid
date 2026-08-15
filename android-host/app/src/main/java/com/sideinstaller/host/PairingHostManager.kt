@@ -3,6 +3,7 @@ package com.sideinstaller.host
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -17,8 +18,8 @@ class PairingHostManager(private val context: Context) {
     companion object {
         private const val TAG = "PairingHostManager"
     }
-    
-    private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
+
+    private var multicastLock: WifiManager.MulticastLock? = null
     private var nsdManager: NsdManager? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var serverSocket: ServerSocket? = null
@@ -33,6 +34,8 @@ class PairingHostManager(private val context: Context) {
     ) {
         Thread {
             try {
+                acquireMulticastLock()
+
                 val listener = ServerSocket(0) // pick a free port
                 val port = listener.localPort
                 serverSocket = listener
@@ -66,6 +69,31 @@ class PairingHostManager(private val context: Context) {
                 stopAdvertising()
             }
         }.start()
+    }
+
+    private fun acquireMulticastLock() {
+        try {
+            val wifiManager = context.applicationContext
+                .getSystemService(Context.WIFI_SERVICE) as WifiManager
+            multicastLock = wifiManager.createMulticastLock("SideHostMulticastLock").apply {
+                setReferenceCounted(true)
+                acquire()
+            }
+            Log.d(TAG, "Multicast lock acquired.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire multicast lock", e)
+        }
+    }
+
+    private fun releaseMulticastLock() {
+        try {
+            multicastLock?.let {
+                if (it.isHeld) it.release()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to release multicast lock", e)
+        }
+        multicastLock = null
     }
 
     private fun registerBonjourService(port: Int) {
@@ -108,6 +136,7 @@ class PairingHostManager(private val context: Context) {
             serverSocket?.close()
         } catch (_: Exception) {}
         serverSocket = null
+        releaseMulticastLock()
     }
 
     fun startFileServer(file: File, port: Int) {

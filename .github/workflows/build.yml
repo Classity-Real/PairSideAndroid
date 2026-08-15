@@ -43,6 +43,26 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Install Rust toolchain & Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Rust native library for Android
+        run: |
+          mkdir -p android-host/app/src/main/jniLibs
+          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | sort -V | tail -n 1)
+          echo "Using NDK at: $NDK_PATH"
+          cd core-ffi
+          ANDROID_NDK_HOME="$NDK_PATH" cargo ndk \
+            -t arm64-v8a \
+            -t x86_64 \
+            -o ../android-host/app/src/main/jniLibs \
+            -- build --release
+
       - name: Download and install Gradle ${{ env.GRADLE_VERSION }}
         run: |
           mkdir -p "$HOME/.gradle-dist"

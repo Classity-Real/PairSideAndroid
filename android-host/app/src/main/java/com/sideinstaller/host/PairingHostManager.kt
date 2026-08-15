@@ -17,13 +17,6 @@ class PairingHostManager(private val context: Context) {
 
     companion object {
         private const val TAG = "PairingHostManager"
-        init {
-            try {
-                System.loadLibrary("sideinstaller_ffi")
-            } catch (e: UnsatisfiedLinkError) {
-                Log.e(TAG, "Failed to load native library sideinstaller_ffi", e)
-            }
-        }
     }
 
     private var nsdManager: NsdManager? = null
@@ -32,7 +25,10 @@ class PairingHostManager(private val context: Context) {
     private var serverThread: Thread? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private external fun nativeRunHost(bindIp: String, hostName: String, outputPath: String): Int
+    private fun nativeRunHost(bindIp: String, hostName: String, outputPath: String): Int {
+        Log.w(TAG, "nativeRunHost: pairing logic not yet implemented (bindIp=$bindIp, hostName=$hostName)")
+        return -100
+    }
 
     fun startPairingHost(
         onPinGenerated: (String) -> Unit,
@@ -51,7 +47,7 @@ class PairingHostManager(private val context: Context) {
 
         Thread {
             try {
-                Log.d(TAG, "Starting native run host on 0.0.0.0:$servicePort...")
+                Log.d(TAG, "Starting host on 0.0.0.0:$servicePort...")
                 val result = nativeRunHost("0.0.0.0", "SideInstallerHost", outputFile.absolutePath)
 
                 mainHandler.post {
@@ -59,13 +55,13 @@ class PairingHostManager(private val context: Context) {
                         Log.d(TAG, "Pairing successful! File size: ${outputFile.length()} bytes")
                         onSuccess(outputFile)
                     } else {
-                        Log.e(TAG, "Native host execution failed with code $result")
+                        Log.e(TAG, "Host execution failed with code $result")
                         onError("Pairing failed (Exit code $result)")
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Exception running host server", e)
-                mainHandler.post { onError(e.localizedMessage ?: "Unknown native error") }
+                mainHandler.post { onError(e.localizedMessage ?: "Unknown error") }
             }
         }.start()
     }
@@ -103,7 +99,6 @@ class PairingHostManager(private val context: Context) {
         }
     }
 
-    // Minimal single-endpoint HTTP server using raw sockets (Android has no com.sun.net.httpserver)
     fun startFileServer(file: File, port: Int) {
         stopFileServer()
         try {
@@ -129,7 +124,7 @@ class PairingHostManager(private val context: Context) {
     private fun handleClient(client: Socket, file: File) {
         Thread {
             try {
-                client.getInputStream().bufferedReader().readLine() // read request line, ignore rest
+                client.getInputStream().bufferedReader().readLine()
 
                 val out: OutputStream = client.getOutputStream()
                 val bytes = file.readBytes()
@@ -166,17 +161,4 @@ class PairingHostManager(private val context: Context) {
                 if (intf.isUp && !intf.isLoopback) {
                     for (addr in intf.inetAddresses) {
                         if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                            val ip = addr.hostAddress ?: continue
-                            if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) {
-                                return ip
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error getting IP address", e)
-        }
-        return "127.0.0.1"
-    }
-}
+                            val ip = addr.hostAddress ?: contin

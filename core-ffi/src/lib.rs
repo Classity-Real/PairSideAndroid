@@ -1,8 +1,7 @@
 use jni::objects::{JClass, JString};
 use jni::sys::jint;
 use jni::JNIEnv;
-use std::ffi::CString;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::c_int;
 
 #[cfg(target_os = "android")]
 use android_logger::Config;
@@ -56,30 +55,17 @@ pub extern "system" fn Java_com_sideinstaller_host_PairingHostManager_nativeRunH
         out_str
     );
 
-    // 2. Convert to C-compatible CStrings
-    let c_bind = CString::new(bind_str).unwrap_or_default();
-    let c_name = CString::new(name_str).unwrap_or_default();
-    let c_out = CString::new(out_str).unwrap_or_default();
-
-    // 3. Execute the native pairing host routine
-    let result_code = unsafe {
-        si_pairing_run_host(
-            c_bind.as_ptr(),
-            c_name.as_ptr(),
-            c_out.as_ptr(),
-        )
-    };
+    // 2. Execute the (currently stubbed) pairing host routine
+    let result_code = si_pairing_run_host(&bind_str, &name_str, &out_str);
 
     log::info!("si_pairing_run_host finished with result code: {}", result_code);
 
     result_code as jint
 }
 
-// Internal / C-FFI declaration for the low-level pairing runner
-extern "C" {
-    fn si_pairing_run_host(
-        bind_ip: *const c_char,
-        host_name: *const c_char,
-        output_path: *const c_char,
-    ) -> c_int;
+/// Placeholder for the real RemotePairing implementation.
+/// Currently returns a sentinel "not implemented" code instead of crashing.
+fn si_pairing_run_host(_bind_ip: &str, _host_name: &str, _output_path: &str) -> c_int {
+    log::warn!("si_pairing_run_host: not yet implemented");
+    -100
 }

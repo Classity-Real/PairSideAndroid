@@ -6,11 +6,12 @@ import android.net.nsd.NsdServiceInfo
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import com.sun.net.httpserver.HttpServer
 import java.io.File
+import java.io.OutputStream
 import java.net.Inet4Address
-import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.ServerSocket
+import java.net.Socket
 
 class PairingHostManager(private val context: Context) {
 
@@ -27,7 +28,8 @@ class PairingHostManager(private val context: Context) {
 
     private var nsdManager: NsdManager? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
-    private var httpServer: HttpServer? = null
+    private var serverSocket: ServerSocket? = null
+    private var serverThread: Thread? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private external fun nativeRunHost(bindIp: String, hostName: String, outputPath: String): Int
@@ -101,27 +103,60 @@ class PairingHostManager(private val context: Context) {
         }
     }
 
+    // Minimal single-endpoint HTTP server using raw sockets (Android has no com.sun.net.httpserver)
     fun startFileServer(file: File, port: Int) {
         stopFileServer()
         try {
-            httpServer = HttpServer.create(InetSocketAddress(port), 0).apply {
-                createContext("/pairing.pair") { exchange ->
-                    val bytes = file.readBytes()
-                    exchange.sendResponseHeaders(200, bytes.size.toLong())
-                    exchange.responseBody.use { it.write(bytes) }
+            serverSocket = ServerSocket(port)
+            serverThread = Thread {
+                Log.d(TAG, "Local file server started on port $port")
+                while (!Thread.currentThread().isInterrupted) {
+                    try {
+                        val client = serverSocket?.accept() ?: break
+                        handleClient(client, file)
+                    } catch (e: Exception) {
+                        if (serverSocket?.isClosed == true) break
+                        Log.e(TAG, "Error accepting client", e)
+                    }
                 }
-                executor = null
-                start()
             }
-            Log.d(TAG, "Local file server started on port $port")
+            serverThread?.start()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start local HTTP server", e)
         }
     }
 
+    private fun handleClient(client: Socket, file: File) {
+        Thread {
+            try {
+                client.getInputStream().bufferedReader().readLine() // read request line, ignore rest
+
+                val out: OutputStream = client.getOutputStream()
+                val bytes = file.readBytes()
+                val header = "HTTP/1.1 200 OK\r\n" +
+                        "Content-Type: application/octet-stream\r\n" +
+                        "Content-Length: ${bytes.size}\r\n" +
+                        "Connection: close\r\n\r\n"
+                out.write(header.toByteArray())
+                out.write(bytes)
+                out.flush()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error serving client", e)
+            } finally {
+                client.close()
+            }
+        }.start()
+    }
+
     fun stopFileServer() {
-        httpServer?.stop(0)
-        httpServer = null
+        try {
+            serverThread?.interrupt()
+            serverSocket?.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping file server", e)
+        }
+        serverSocket = null
+        serverThread = null
     }
 
     fun getDeviceIpAddress(): String {

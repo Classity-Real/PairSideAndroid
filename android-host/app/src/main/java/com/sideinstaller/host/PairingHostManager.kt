@@ -7,11 +7,10 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import java.io.File
-import java.io.OutputStream
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
-import java.net.Socket
+import java.security.SecureRandom
 
 class PairingHostManager(private val context: Context) {
 
@@ -22,46 +21,48 @@ class PairingHostManager(private val context: Context) {
     private var nsdManager: NsdManager? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var serverSocket: ServerSocket? = null
-    private var serverThread: Thread? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private fun nativeRunHost(bindIp: String, hostName: String, outputPath: String): Int {
-        Log.w(TAG, "nativeRunHost: pairing logic not yet implemented (bindIp=$bindIp, hostName=$hostName)")
-        return -100
-    }
+    private val hostIdentifier: String = java.util.UUID.randomUUID().toString().uppercase()
 
     fun startPairingHost(
         onPinGenerated: (String) -> Unit,
         onSuccess: (File) -> Unit,
         onError: (String) -> Unit
     ) {
-        val outputFile = File(context.filesDir, "pairing.pair")
-        if (outputFile.exists()) {
-            outputFile.delete()
-        }
-
-        val servicePort = 52345
-        registerBonjourService(servicePort)
-
-        mainHandler.post { onPinGenerated("123456") }
-
         Thread {
             try {
-                Log.d(TAG, "Starting host on 0.0.0.0:$servicePort...")
-                val result = nativeRunHost("0.0.0.0", "SideInstallerHost", outputFile.absolutePath)
+                val listener = ServerSocket(0) // pick a free port
+                val port = listener.localPort
+                serverSocket = listener
+                registerBonjourService(port)
+                Log.d(TAG, "Advertising pairable host on port $port, waiting for a device...")
 
-                mainHandler.post {
-                    if (result == 0 && outputFile.exists() && outputFile.length() > 0) {
-                        Log.d(TAG, "Pairing successful! File size: ${outputFile.length()} bytes")
-                        onSuccess(outputFile)
-                    } else {
-                        Log.e(TAG, "Host execution failed with code $result")
-                        onError("Pairing failed (Exit code $result)")
-                    }
+                val clientSocket = listener.accept() // blocks until iPhone connects
+                Log.d(TAG, "Device connected from ${clientSocket.inetAddress}")
+
+                val host = PairableHost(clientSocket, hostIdentifier, "SideInstaller Host")
+
+                val srpResult = host.acceptHandshakeAndSrp { pin ->
+                    mainHandler.post { onPinGenerated(pin) }
                 }
+                Log.d(TAG, "SRP pair-setup phase complete (M1-M4). Session key established.")
+
+                val hostAltIrk = ByteArray(16).also { SecureRandom().nextBytes(it) }
+                val ed25519 = Ed25519KeyPair.generate()
+                val peerDevice = host.completeIdentityExchange(srpResult, hostAltIrk, ed25519)
+
+                Log.i(TAG, "Pairing complete! Paired with ${peerDevice.name} (${peerDevice.model})")
+                mainHandler.post {
+                    onSuccess(File(context.filesDir, "pairing.pair")) // placeholder file for now
+                }
+                host.close()
+
             } catch (e: Exception) {
-                Log.e(TAG, "Exception running host server", e)
+                Log.e(TAG, "Pairing host error", e)
                 mainHandler.post { onError(e.localizedMessage ?: "Unknown error") }
+            } finally {
+                stopAdvertising()
             }
         }.start()
     }
@@ -71,7 +72,12 @@ class PairingHostManager(private val context: Context) {
             serviceName = "SideInstallerHost"
             serviceType = "_remotepairing-pairable-host._tcp."
             setPort(port)
-            setAttribute("v", "1")
+            setAttribute("name", "SideInstaller Host")
+            setAttribute("identifier", hostIdentifier)
+            setAttribute("model", "Mac17,7")
+            setAttribute("flags", "1")
+            setAttribute("ver", "26")
+            setAttribute("minVer", "17")
         }
 
         nsdManager = (context.getSystemService(Context.NSD_SERVICE) as NsdManager)
@@ -97,62 +103,17 @@ class PairingHostManager(private val context: Context) {
                 Log.e(TAG, "Error unregistering NSD service", e)
             }
         }
+        try {
+            serverSocket?.close()
+        } catch (_: Exception) {}
+        serverSocket = null
     }
 
     fun startFileServer(file: File, port: Int) {
-        stopFileServer()
-        try {
-            serverSocket = ServerSocket(port)
-            serverThread = Thread {
-                Log.d(TAG, "Local file server started on port $port")
-                while (!Thread.currentThread().isInterrupted) {
-                    try {
-                        val client = serverSocket?.accept() ?: break
-                        handleClient(client, file)
-                    } catch (e: Exception) {
-                        if (serverSocket?.isClosed == true) break
-                        Log.e(TAG, "Error accepting client", e)
-                    }
-                }
-            }
-            serverThread?.start()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start local HTTP server", e)
-        }
+        // Not needed yet - pairing record delivery approach TBD.
     }
 
-    private fun handleClient(client: Socket, file: File) {
-        Thread {
-            try {
-                client.getInputStream().bufferedReader().readLine()
-
-                val out: OutputStream = client.getOutputStream()
-                val bytes = file.readBytes()
-                val header = "HTTP/1.1 200 OK\r\n" +
-                        "Content-Type: application/octet-stream\r\n" +
-                        "Content-Length: ${bytes.size}\r\n" +
-                        "Connection: close\r\n\r\n"
-                out.write(header.toByteArray())
-                out.write(bytes)
-                out.flush()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error serving client", e)
-            } finally {
-                client.close()
-            }
-        }.start()
-    }
-
-    fun stopFileServer() {
-        try {
-            serverThread?.interrupt()
-            serverSocket?.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping file server", e)
-        }
-        serverSocket = null
-        serverThread = null
-    }
+    fun stopFileServer() {}
 
     fun getDeviceIpAddress(): String {
         try {

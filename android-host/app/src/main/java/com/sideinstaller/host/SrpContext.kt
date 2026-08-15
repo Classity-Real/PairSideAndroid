@@ -2,6 +2,7 @@ package com.sideinstaller.host
 
 import java.math.BigInteger
 import java.security.MessageDigest
+import java.security.SecureRandom
 
 /**
  * SRP-6a (RFC 2945 / RFC 5054) context, ported to match idlesign/srptools' exact
@@ -76,11 +77,10 @@ class SrpContext(
     fun getCommonPasswordVerifier(passwordHash: BigInteger): BigInteger =
         generator.modPow(passwordHash, prime)
 
-    /** b = random private value (32 bytes ~ 256 bits is plenty; srptools defaults to 1024 bits
-     *  for its "bits_random"; we use a comparable size). */
+    /** b = random private value. srptools defaults to 1024 bits ("bits_random"); matched here. */
     fun generateServerPrivate(): BigInteger {
-        val bytes = ByteArray(128) // 1024 bits, matches srptools' bits_random default
-        java.security.SecureRandom().nextBytes(bytes)
+        val bytes = ByteArray(128) // 1024 bits
+        SecureRandom().nextBytes(bytes)
         return BigInteger(1, bytes)
     }
 
@@ -112,7 +112,8 @@ class SrpContext(
         hashBytes(premasterSecret)
 
     /**
-     * Verify the client's proof M1 = H(H(N) XOR H(g) | H(I) | s | A | B | K).
+     * Compute the expected client proof M1 = H(H(N) XOR H(g) | H(I) | s | A | B | K),
+     * to compare against what the client actually sent.
      * salt must be the same BigInteger form used in getCommonPasswordHash.
      */
     fun computeSessionKeyProof(
@@ -137,21 +138,23 @@ class SrpContext(
 
     companion object {
         /**
-         * RFC 3526 / RFC 5054 3072-bit MODP group prime (hex, no separators).
+         * RFC 5054 3072-bit MODP group prime, verified byte-for-byte against
+         * idlesign/srptools' constants.py PRIME_3072.
          */
-        private const val PRIME_3072_HEX = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD" +
-            "129024E088A67CC74020BBEA63B139B22514A08798E3404DD" +
-            "EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245" +
-            "E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED" +
-            "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D" +
-            "C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F" +
-            "83655D23DCA3AD961C62F356208552BB9ED529077096966D" +
-            "670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B" +
-            "E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9" +
-            "DE2BCBF69558171839954497CEA956AE515D2261898FA051" +
-            "015728E5A8AACAA68FFFFFFFFFFFFFFFF"
+        private const val PRIME_3072_HEX =
+            "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA6" +
+            "3B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245" +
+            "E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F2411" +
+            "7C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F" +
+            "83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08" +
+            "CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9" +
+            "DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AAAC42DAD33170D" +
+            "04507A33A85521ABDF1CBA64ECFB850458DBEF0A8AEA71575D060C7DB3970F85A6E1E4C7" +
+            "ABF5AE8CDB0933D71E8C94E04A25619DCEE3D2261AD2EE6BF12FFA06D98A0864D8760273" +
+            "3EC86A64521F2B18177B200CBBE117577A615D6C770988C0BAD946E208E24FA074E5AB31" +
+            "43DB5BFCE0FD108E4B82D120A93AD2CAFFFFFFFFFFFFFFFF"
 
-        private const val PRIME_3072_GEN_HEX = "05"
+        private const val PRIME_3072_GEN_HEX = "5"
 
         fun createPair3072(username: String): SrpContext {
             val n = BigInteger(PRIME_3072_HEX, 16)
